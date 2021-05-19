@@ -52,6 +52,39 @@ impl Shell {
             vars,
         }
     }
+
+    fn append_history(&self, item: &str) {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.hist_path)
+            .unwrap();
+        writeln!(file, "{}", item).unwrap();
+    }
+
+    fn read_history(&self, line_num: usize) -> String {
+        if let Ok(file) = std::fs::File::open(&self.hist_path) {
+            let content = std::io::BufReader::new(&file);
+            let mut lines = content.lines();
+            return lines.nth(line_num).unwrap().unwrap();
+        } else {
+            return "".to_string();
+        }
+    }
+
+    fn get_hist_len(&self) -> usize {
+        let file = std::fs::File::open(&self.hist_path);
+        if let Ok(file) = file {
+            let reader = std::io::BufReader::new(file);
+            let mut count = 0;
+            for line in reader.lines() { 
+                if line.unwrap() != "" { count += 1; }
+            }
+            count
+        } else {
+            0
+        }
+    }
     
     fn get_ps1(&self) -> String {
         let fmt_string = self.vars.get("PS1").unwrap();
@@ -74,10 +107,10 @@ impl Shell {
                     .stdout(std::process::Stdio::piped())
                     .output();
                 match res {
-                    Ok(mut child) => {
+                    Ok(child) => {
                         return String::from_utf8_lossy(&child.stdout).to_string();
                     }
-                    Err(error) => {
+                    Err(_) => {
                         eprintln!("josh: {}: command not found", command);
                     }
                 }
@@ -120,9 +153,9 @@ impl Shell {
                 let res = std::process::Command::new(command).args(argv).spawn();
                 match res {
                     Ok(mut child) => {
-                        child.wait();
+                        child.wait().unwrap();
                     }
-                    Err(error) => {
+                    Err(_) => {
                         println!("josh: {}: command not found", command);
                     }
                 }
@@ -163,17 +196,24 @@ impl Shell {
     
     fn run(&mut self) {
         self.exec_rc();
-        let mut hist: Vec<String> = Vec::new();
         loop {
             print!("{}", self.get_ps1());
-            std::io::stdout().flush();
+            std::io::stdout().flush().unwrap();
 
             let mut stdout = std::io::stdout().into_raw_mode().unwrap();
             let mut input = String::new();
-            let mut hist_pos: usize = hist.len();
             let mut inp_buffer = String::new();
             let mut inp_pos: usize = 0;
+            
+            let mut hist_len = self.get_hist_len();
+            let mut hist_pos: usize = hist_len;
+
             for event in std::io::stdin().events() {
+                let nhist_len = self.get_hist_len();
+                if hist_pos == hist_len && hist_len != nhist_len {
+                    hist_pos = nhist_len;
+                }
+                hist_len = nhist_len;
                 match event.unwrap() {
                     Event::Key(Key::Ctrl('d')) => {
                         println!("\r");
@@ -188,7 +228,7 @@ impl Shell {
                     Event::Key(Key::Up) => {
                         if hist_pos > 0 {
                             hist_pos -= 1;
-                            input = hist[hist_pos].clone();
+                            input = self.read_history(hist_pos);
                             inp_pos = input.chars().count();
                         }
                     }
@@ -197,12 +237,12 @@ impl Shell {
                     Event::Key(Key::Right) => if inp_pos < input.chars().count() { inp_pos += 1 },
                     
                     Event::Key(Key::Down) => {
-                        if hist_pos + 1 < hist.len() {
+                        if hist_pos + 1 < hist_len {
                             hist_pos += 1;
-                            input = hist[hist_pos].clone();
+                            input = self.read_history(hist_pos);
                             inp_pos = input.chars().count();
                         } else {
-                            hist_pos = hist.len();
+                            hist_pos = hist_len;
                             input = inp_buffer.clone();
                             inp_pos = input.chars().count();
                         }
@@ -235,7 +275,7 @@ impl Shell {
                     if pos_from_right > 0 { termion::cursor::Left(pos_from_right).to_string() }
                     else { "".to_string() },
                 );
-                stdout.flush();
+                stdout.flush().unwrap();
             }
             drop(stdout);
             if input == "" {
@@ -248,13 +288,10 @@ impl Shell {
                     input.pop();
                 }
             }
-            
-            if let Some(cmd) = hist.last() {
-                if cmd != &input {
-                    hist.push(input.clone());
-                }
-            } else {
-                hist.push(input.clone());
+
+            let hlen = self.get_hist_len();
+            if hlen == 0 || self.read_history(hlen - 1) != input {
+                self.append_history(&input);
             }
 
             let argv = self.parse_argv(input);
