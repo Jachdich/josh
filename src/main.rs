@@ -3,7 +3,6 @@ use std::io::BufRead;
 use std::env;
 extern crate dirs;
 use std::collections::HashMap;
-
 use std::path::{Path, PathBuf};
 
 fn expand_tilde<P: AsRef<Path>>(path_user_input: &P) -> Option<PathBuf> {
@@ -55,6 +54,30 @@ impl Shell {
             .replace("\\h", &whoami::hostname())
             .replace("\\u", &whoami::username())
         )
+    }
+
+    fn execute_command_get_output(&mut self, command: &str, argv: &[String]) -> String {
+        match command {
+            "alias" | "cd" => {
+                "".to_string();
+            },
+
+            command => {
+                let res = std::process::Command::new(command)
+                    .args(argv)
+                    .stdout(std::process::Stdio::piped())
+                    .output();
+                match res {
+                    Ok(mut child) => {
+                        return String::from_utf8_lossy(&child.stdout).to_string();
+                    }
+                    Err(error) => {
+                        eprintln!("josh: {}: command not found", command);
+                    }
+                }
+            },
+        }
+        "".to_string()
     }
 
     fn execute_command(&mut self, command: &str, argv: &[String]) -> bool {
@@ -155,6 +178,7 @@ impl Shell {
             match argv {
                 Some(argv) => {
                     if argv.len() == 0 { continue; }
+                    if argv[0] == "exit" { break; }
                     if !self.execute_command(&argv[0], &argv[1..]) {
                         break;
                     }
@@ -226,7 +250,6 @@ impl Shell {
                     if pos == data.len() { continue; }
                     match data[pos] {
                         '(' => {
-                        /*
                             pos += 1;
                             let mut command = String::new();
                             let mut opening = 1;
@@ -237,20 +260,19 @@ impl Shell {
                                 command.push(data[pos]);
                                 pos += 1;
                             }
+                            command.pop(); //the closing )
 
                             let argv = self.parse_argv(command);
                             match argv {
                                 Some(argv) => {
                                     if argv.len() == 0 { continue; }
-                                    if !self.execute_command_get_output(&argv[0], &argv[1..]) {
-                                        break;
-                                    }
+                                    let output = self.execute_command_get_output(&argv[0], &argv[1..]);
                                     for c in output.chars() {
                                         res.push(c);
                                     }
                                 }
                                 None => ()
-                            }*/
+                            }
                         }
 
                         '{' => {
