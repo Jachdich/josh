@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::io::BufRead;
 use std::env;
 extern crate dirs;
 use std::collections::HashMap;
@@ -35,7 +36,7 @@ struct Shell {
 impl Shell {
     fn new() -> Self {
         let mut vars: HashMap<String, String> = HashMap::new();
-        vars.insert("PS1".to_string(), ">".to_string());
+        vars.insert("PS1".to_string(), r#"> "#.to_string());
         let w_dir = std::env::current_dir().unwrap();
         let mut rc_path = dirs::home_dir().unwrap();
         let mut hist_path = dirs::home_dir().unwrap();
@@ -48,7 +49,12 @@ impl Shell {
     }
     
     fn get_ps1(&self) -> String {
-        format!("{}", self.vars.get("PS1").unwrap())
+        let fmt_string = self.vars.get("PS1").unwrap();
+        format!("{}", fmt_string
+            .replace("\\w", &std::env::current_dir().unwrap().to_str().unwrap().replace(dirs::home_dir().unwrap().to_str().unwrap(), "~"))
+            .replace("\\h", &whoami::hostname())
+            .replace("\\u", &whoami::username())
+        )
     }
 
     fn execute_command(&mut self, command: &str, argv: &[String]) -> bool {
@@ -95,8 +101,39 @@ impl Shell {
         }
         true
     }
+
+    fn exec_rc(&mut self) {
+        let file = std::fs::File::open(&self.rc_path).unwrap();
+        let reader = std::io::BufReader::new(file);
+    
+        for line in reader.lines() {
+            let mut input = line.unwrap();
+            if input == "" {
+                continue;
+            }
+            if input.ends_with('\n') {
+                input.pop();
+                if input.ends_with('\r') {
+                    input.pop();
+                }
+            }
+
+            let argv = self.parse_argv(input);
+            match argv {
+                Some(argv) => {
+                    if argv.len() == 0 { continue; }
+                    if !self.execute_command(&argv[0], &argv[1..]) {
+                        break;
+                    }
+                }
+                None => {
+                }
+            }
+        }
+    }
     
     fn run(&mut self) {
+        self.exec_rc();
         loop {
             print!("{}", self.get_ps1());
             std::io::stdout().flush();
@@ -125,7 +162,6 @@ impl Shell {
                 None => {
                 }
             }
-            
         }
     }
 
@@ -187,17 +223,62 @@ impl Shell {
             match data[pos] {
                 '$' => {
                     pos += 1;
-                    let mut name = String::new();
-                    while pos < data.len() && data[pos] != ' ' {
-                        name.push(data[pos]);
-                        pos += 1;
-                    }
-                    if self.vars.contains_key(&name) {
-                        for c in self.vars.get(&name).unwrap().chars() {
-                            res.push(c);
+                    if pos == data.len() { continue; }
+                    match data[pos] {
+                        '(' => {
+                        /*
+                            pos += 1;
+                            let mut command = String::new();
+                            let mut opening = 1;
+                            let mut closing = 0;
+                            while pos < data.len() && opening > closing{
+                                if data[pos] == '(' { opening += 1; }
+                                if data[pos] == ')' { closing += 1; }
+                                command.push(data[pos]);
+                                pos += 1;
+                            }
+
+                            let argv = self.parse_argv(command);
+                            match argv {
+                                Some(argv) => {
+                                    if argv.len() == 0 { continue; }
+                                    if !self.execute_command_get_output(&argv[0], &argv[1..]) {
+                                        break;
+                                    }
+                                    for c in output.chars() {
+                                        res.push(c);
+                                    }
+                                }
+                                None => ()
+                            }*/
                         }
-                    } else {
-                        //do nothing so far
+
+                        '{' => {
+                            pos += 1;
+                            let mut name = String::new();
+                            while pos < data.len() && data[pos] != '}' {
+                                name.push(data[pos]);
+                                pos += 1;
+                            }
+                            if self.vars.contains_key(&name) {
+                                for c in self.vars.get(&name).unwrap().chars() {
+                                    res.push(c);
+                                }
+                            }
+                        }
+
+                        _ => {
+                            let mut name = String::new();
+                            while pos < data.len() && data[pos] != ' ' {
+                                name.push(data[pos]);
+                                pos += 1;
+                            }
+                            if self.vars.contains_key(&name) {
+                                for c in self.vars.get(&name).unwrap().chars() {
+                                    res.push(c);
+                                }
+                            }
+                        }
                     }
                 }
                 '\n' => pos += 1,
