@@ -5,6 +5,12 @@ extern crate dirs;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use termion;
+use termion::input::TermRead;
+use termion::raw::IntoRawMode;
+use termion::event::Event;
+use termion::event::Key;
+
 fn expand_tilde<P: AsRef<Path>>(path_user_input: &P) -> Option<PathBuf> {
     let p = path_user_input.as_ref();
     if !p.starts_with("~") {
@@ -157,14 +163,83 @@ impl Shell {
     
     fn run(&mut self) {
         self.exec_rc();
+        let mut hist: Vec<String> = Vec::new();
         loop {
             print!("{}", self.get_ps1());
             std::io::stdout().flush();
 
+            let mut stdout = std::io::stdout().into_raw_mode().unwrap();
             let mut input = String::new();
-            std::io::stdin().read_line(&mut input).unwrap();
+            let mut hist_pos: usize = hist.len();
+            let mut inp_buffer = String::new();
+            let mut inp_pos: usize = 0;
+            for event in std::io::stdin().events() {
+                match event.unwrap() {
+                    Event::Key(Key::Ctrl('d')) => {
+                        println!("\r");
+                        return;
+                    }
+                    Event::Key(Key::Ctrl('c')) => {
+                        print!("^C\r\n");
+                        input = "\n".to_string();
+                        break;
+                    }
+
+                    Event::Key(Key::Up) => {
+                        if hist_pos > 0 {
+                            hist_pos -= 1;
+                            input = hist[hist_pos].clone();
+                            inp_pos = input.chars().count();
+                        }
+                    }
+
+                    Event::Key(Key::Left)  => if inp_pos > 0 { inp_pos -= 1 },
+                    Event::Key(Key::Right) => if inp_pos < input.chars().count() { inp_pos += 1 },
+                    
+                    Event::Key(Key::Down) => {
+                        if hist_pos + 1 < hist.len() {
+                            hist_pos += 1;
+                            input = hist[hist_pos].clone();
+                            inp_pos = input.chars().count();
+                        } else {
+                            hist_pos = hist.len();
+                            input = inp_buffer.clone();
+                            inp_pos = input.chars().count();
+                        }
+                    }
+                    Event::Key(Key::Char('\n')) => {
+                        print!("\r\n");
+                        input.push('\n');
+                        break;
+                    }
+                    Event::Key(Key::Backspace) => {
+                        if input.len() > 0 {
+                            input.remove(inp_pos - 1);
+                            inp_pos -= 1;
+                        }
+                        inp_buffer = input.clone();
+                    }
+                    Event::Key(Key::Char(c)) => {
+                        input.insert(inp_pos, c);
+                        inp_buffer = input.clone();
+                        inp_pos += 1;
+                    }
+                    _ => ()
+                }
+
+                let pos_from_right = (input.chars().count() - inp_pos) as u16;
+                print!("{}\r{}{}{}",
+                    termion::clear::CurrentLine,
+                    self.get_ps1(),
+                    input,
+                    if pos_from_right > 0 { termion::cursor::Left(pos_from_right).to_string() }
+                    else { "".to_string() },
+                );
+                stdout.flush();
+            }
+            drop(stdout);
             if input == "" {
-                println!();
+                println!("\r");
                 return;
             }
             if input.ends_with('\n') {
@@ -172,6 +247,14 @@ impl Shell {
                 if input.ends_with('\r') {
                     input.pop();
                 }
+            }
+            
+            if let Some(cmd) = hist.last() {
+                if cmd != &input {
+                    hist.push(input.clone());
+                }
+            } else {
+                hist.push(input.clone());
             }
 
             let argv = self.parse_argv(input);
@@ -222,7 +305,7 @@ impl Shell {
                         pos += 1;
                     }
                     if pos == data.len() {
-                        println!("josh: EOF while scanning string literal");
+                        eprintln!("josh: EOF while scanning string literal");
                         return None;
                     }
                     pos += 1;
