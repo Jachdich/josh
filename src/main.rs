@@ -193,6 +193,65 @@ impl Shell {
             }
         }
     }
+
+    fn get_tab_complete(&self, input: &str) -> (Vec<String>, Vec<String>) {
+        let argv: Vec<&str> = input.split_whitespace().into_iter().collect();
+        if argv.len() == 1 && !input.ends_with(" ") {
+            //complete command
+            (Vec::new(), Vec::new())
+        } else if input.ends_with(" ") {
+            //new arg
+            let mut res: Vec<String> = Vec::new();
+            for path in std::fs::read_dir("./").unwrap() {
+                let path = path.unwrap();
+                let mut name = path.path().to_str().unwrap()[2..].to_string();
+                if path.path().is_dir() {
+                    name.push('/');
+                }
+                res.push(name);
+            }
+            (res.clone(), res)
+        } else {
+            //complete current arg
+            let mut res: Vec<String> = Vec::new();
+            let mut visual: Vec<String> = Vec::new();
+            let mut path_to_search: PathBuf;
+            if argv[argv.len() - 1].starts_with("/") {
+                path_to_search = PathBuf::new();
+            } else {
+                path_to_search = PathBuf::from("./");
+            }
+            
+            path_to_search.push(PathBuf::from(argv[argv.len() - 1]));
+            
+            if !std::path::Path::new(&path_to_search).exists() {
+                path_to_search.pop();
+            }
+            
+            let paths = std::fs::read_dir(path_to_search);
+            if let Ok(paths) = paths {
+                for path in paths {
+                    let path = path.unwrap().path();
+                    let mut item = path.to_str().unwrap();
+                    if item.starts_with("./") {
+                        item = &item[2..];
+                    }
+                    if item.starts_with(&argv[argv.len() - 1]) {
+                        let mut name_only = Path::new(&item).file_name().unwrap().to_str().unwrap().to_string();
+                        let mut full_path = Path::new(&item).to_str().unwrap().to_string();
+                        if Path::new(&item).is_dir() {
+                            name_only.push('/');
+                            full_path.push('/');
+                        }
+                        visual.push(name_only);
+                        res.push(full_path);
+                    }
+                }
+            }
+            (res, visual)
+        }
+        
+    }
     
     fn run(&mut self) {
         self.exec_rc();
@@ -247,6 +306,25 @@ impl Shell {
                             inp_pos = input.chars().count();
                         }
                     }
+
+                    Event::Key(Key::Char('\t')) => {
+                        let results = self.get_tab_complete(&input);
+                        print!("\n");
+                        if results.0.len() == 1 {
+                            let mut argv: Vec<&str> = input.split_whitespace().into_iter().collect();
+                            let len = argv.len();
+                            argv[len - 1] = &results.0[0];
+                            input = argv.join(" ");
+                            inp_pos = input.chars().count();
+                        } else if results.0.len() > 1 {
+                            print!("\r");
+                            for n in results.1 {
+                                print!("{} ", n);
+                            }
+                            print!("\n");
+                        }
+                    }
+                    
                     Event::Key(Key::Char('\n')) => {
                         print!("\r\n");
                         input.push('\n');
