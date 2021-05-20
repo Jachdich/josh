@@ -55,6 +55,7 @@ impl Shell {
     }
 
     fn append_history(&self, item: &str) {
+        if item == "" { return; }
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
