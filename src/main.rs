@@ -36,6 +36,7 @@ struct Shell {
     rc_path: PathBuf,
     hist_path: PathBuf,
     vars: HashMap<String, String>,
+    aliases: HashMap<String, String>,
 }
 
 impl Shell {
@@ -49,7 +50,7 @@ impl Shell {
         hist_path.push(".josh_history");
         Shell {
             w_dir, rc_path, hist_path,
-            vars,
+            vars, aliases: HashMap::new(),
         }
     }
 
@@ -144,13 +145,29 @@ impl Shell {
                 }
             },
             "alias" => {
-                
+                if argv.len() > 2 {
+                    eprintln!("josh: alias: too many arguments");
+                } else if argv.len() < 2 {
+                    eprintln!("josh: alias: too few arguments");
+                } else {
+                    self.aliases.insert(argv[0].to_owned(), argv[1].to_owned());
+                }
             },
 
             "exit" => return false,
 
             command => {
-                let res = std::process::Command::new(command).args(argv).spawn();
+                let actual_command: &str;
+                let mut actual_argv: Vec<&String> = argv.iter().collect();
+                let alias_argv: Vec<String>;
+                if self.aliases.contains_key(command) {
+                    alias_argv = self.parse_argv(self.aliases[command].to_owned()).unwrap(); //TODO unwrap bad here
+                    actual_command = &alias_argv[0];
+                    actual_argv.extend(&alias_argv[1..]);
+                } else {
+                    actual_command = command;
+                }
+                let res = std::process::Command::new(actual_command).args(actual_argv).spawn();
                 match res {
                     Ok(mut child) => {
                         child.wait().unwrap();
@@ -260,6 +277,7 @@ impl Shell {
             std::io::stdout().flush().unwrap();
 
             let mut stdout = std::io::stdout().into_raw_mode().unwrap();
+            
             let mut input = String::new();
             let mut inp_buffer = String::new();
             let mut inp_pos: usize = 0;
@@ -309,7 +327,6 @@ impl Shell {
 
                     Event::Key(Key::Char('\t')) => {
                         let results = self.get_tab_complete(&input);
-                        print!("\n");
                         if results.0.len() == 1 {
                             let mut argv: Vec<&str> = input.split_whitespace().into_iter().collect();
                             let len = argv.len();
@@ -317,6 +334,7 @@ impl Shell {
                             input = argv.join(" ");
                             inp_pos = input.chars().count();
                         } else if results.0.len() > 1 {
+                            print!("\n"); //dunno why but this makes the prompt print again like bash lol
                             print!("\r");
                             for n in results.1 {
                                 print!("{} ", n);
@@ -489,7 +507,7 @@ impl Shell {
 
                         _ => {
                             let mut name = String::new();
-                            while pos < data.len() && data[pos] != ' ' {
+                            while pos < data.len() && data[pos].is_alphanumeric() {
                                 name.push(data[pos]);
                                 pos += 1;
                             }
@@ -513,5 +531,12 @@ impl Shell {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 {
+        if args[1] == "--version" {
+            println!("0.1.5");
+            return;
+        }
+    }
     Shell::new().run();
 }
