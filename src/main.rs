@@ -10,6 +10,7 @@ use termion::input::TermRead;
 use termion::raw::IntoRawMode;
 use termion::event::Event;
 use termion::event::Key;
+use std::os::unix::fs::PermissionsExt;
 
 fn expand_tilde<P: AsRef<Path>>(path_user_input: &P) -> Option<PathBuf> {
     let p = path_user_input.as_ref();
@@ -29,6 +30,90 @@ fn expand_tilde<P: AsRef<Path>>(path_user_input: &P) -> Option<PathBuf> {
             h
         }
     })
+}
+
+fn get_path_extensions<T>(init_path: String, filter_func: T) -> (Vec<String>, Vec<String>) where T: Fn(PathBuf) -> bool {
+    let mut valid_paths: Vec<String> = Vec::new();
+    let mut short_paths: Vec<String> = Vec::new();
+    let mut path_to_search: PathBuf;
+    if init_path.starts_with("/") {
+        path_to_search = PathBuf::new();
+    } else {
+        path_to_search = PathBuf::from("./");
+    }
+    
+    path_to_search.push(PathBuf::from(&init_path));
+    
+    if !std::path::Path::new(&path_to_search).exists() {
+        path_to_search.pop();
+    }
+    
+    let paths = std::fs::read_dir(path_to_search);
+    if let Ok(paths) = paths {
+        for path in paths {
+            let path = path.unwrap().path();
+            let mut item = path.to_str().unwrap();
+            if item.starts_with("./") && !init_path.starts_with("./") {
+                item = &item[2..];
+            }
+            if item.starts_with(&init_path) && filter_func(path.to_owned()) {
+                let mut name_only = Path::new(&item).file_name().unwrap().to_str().unwrap().to_string();
+                let mut full_path = Path::new(&item).to_str().unwrap().to_string();
+                if Path::new(&item).is_dir() {
+                    name_only.push('/');
+                    full_path.push('/');
+                }
+                short_paths.push(name_only);
+                valid_paths.push(full_path);
+            }
+        }
+    }
+    (valid_paths, short_paths)
+}
+
+fn get_tab_complete(input: &str) -> (Vec<String>, Vec<String>) {
+    let argv: Vec<&str> = input.split_whitespace().into_iter().collect();
+    if argv.len() == 1 && !input.ends_with(" ") {
+        //complete command
+        let mut valid_paths: Vec<String> = Vec::new();
+        let mut short_paths: Vec<String> = Vec::new();
+        for path in env::split_paths(&std::env::var_os("PATH").unwrap()) {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for f in entries {
+                    let f = f.unwrap();
+                    if f.path().is_file() && f.file_name().to_str().unwrap().starts_with(input) {
+                        valid_paths.push(f.file_name().to_str().unwrap().to_string());
+                        short_paths.push(f.file_name().to_str().unwrap().to_string());
+                    }
+                }
+            }
+        }
+        //none were found
+        if valid_paths.len() == 0 {
+            get_path_extensions(argv[0].to_string(), |path_buf| path_buf.metadata().unwrap().permissions().mode() & 0b001001001 > 0)
+        } else {
+            (valid_paths, short_paths)
+        }
+    } else if input.ends_with(" ") {
+        //new arg
+        let mut res: Vec<String> = Vec::new();
+        for path in std::fs::read_dir("./").unwrap() {
+            let path = path.unwrap();
+            let mut name = path.path().to_str().unwrap()[2..].to_string();
+            if path.path().is_dir() {
+                name.push('/');
+            }
+            res.push(name);
+        }
+        (res.clone(), res)
+    } else {
+        //complete current arg
+        if argv.len() == 0 {
+            return (Vec::new(), Vec::new());
+        }
+        get_path_extensions(argv[argv.len() - 1].to_string(), |_| true)
+    }
+    
 }
 
 struct Shell {
@@ -211,79 +296,6 @@ impl Shell {
             }
         }
     }
-
-    fn get_tab_complete(&self, input: &str) -> (Vec<String>, Vec<String>) {
-        let argv: Vec<&str> = input.split_whitespace().into_iter().collect();
-        if argv.len() == 1 && !input.ends_with(" ") {
-            //complete command
-            let mut valid_paths: Vec<String> = Vec::new();
-            for path in env::split_paths(&std::env::var_os("PATH").unwrap()) {
-                if let Ok(entries) = std::fs::read_dir(path) {
-                    for f in entries {
-                        let f = f.unwrap();
-                        if f.path().is_file() && f.file_name().to_str().unwrap().starts_with(input) {
-                            valid_paths.push(f.file_name().to_str().unwrap().to_string());
-                        }
-                    }
-                }
-            }
-            (valid_paths.clone(), valid_paths)
-        } else if input.ends_with(" ") {
-            //new arg
-            let mut res: Vec<String> = Vec::new();
-            for path in std::fs::read_dir("./").unwrap() {
-                let path = path.unwrap();
-                let mut name = path.path().to_str().unwrap()[2..].to_string();
-                if path.path().is_dir() {
-                    name.push('/');
-                }
-                res.push(name);
-            }
-            (res.clone(), res)
-        } else {
-            //complete current arg
-            if argv.len() == 0 {
-                return (Vec::new(), Vec::new());
-            }
-            let mut res: Vec<String> = Vec::new();
-            let mut visual: Vec<String> = Vec::new();
-            let mut path_to_search: PathBuf;
-            if argv[argv.len() - 1].starts_with("/") {
-                path_to_search = PathBuf::new();
-            } else {
-                path_to_search = PathBuf::from("./");
-            }
-            
-            path_to_search.push(PathBuf::from(argv[argv.len() - 1]));
-            
-            if !std::path::Path::new(&path_to_search).exists() {
-                path_to_search.pop();
-            }
-            
-            let paths = std::fs::read_dir(path_to_search);
-            if let Ok(paths) = paths {
-                for path in paths {
-                    let path = path.unwrap().path();
-                    let mut item = path.to_str().unwrap();
-                    if item.starts_with("./") {
-                        item = &item[2..];
-                    }
-                    if item.starts_with(&argv[argv.len() - 1]) {
-                        let mut name_only = Path::new(&item).file_name().unwrap().to_str().unwrap().to_string();
-                        let mut full_path = Path::new(&item).to_str().unwrap().to_string();
-                        if Path::new(&item).is_dir() {
-                            name_only.push('/');
-                            full_path.push('/');
-                        }
-                        visual.push(name_only);
-                        res.push(full_path);
-                    }
-                }
-            }
-            (res, visual)
-        }
-        
-    }
     
     fn run(&mut self) {
         self.exec_rc();
@@ -341,7 +353,7 @@ impl Shell {
                     }
 
                     Event::Key(Key::Char('\t')) => {
-                        let results = self.get_tab_complete(&input);
+                        let results = get_tab_complete(&input);
                         if results.0.len() == 1 {
                             let mut argv: Vec<&str> = input.split_whitespace().into_iter().collect();
                             let len = argv.len();
@@ -441,6 +453,11 @@ impl Shell {
         while pos < data.len() {
             match data[pos] {
                 ' ' => {
+                    if res.last().unwrap().starts_with("~") {
+                        let orig = res.last().unwrap().to_owned();
+                        res.pop();
+                        res.push(expand_tilde(&orig).unwrap().to_str().unwrap().to_owned());
+                    }
                     res.push("".to_string());
                     while pos < data.len() && data[pos] == ' ' {
                         pos += 1;
@@ -466,6 +483,12 @@ impl Shell {
         }
         if res.last().unwrap() == "" {
             res.pop();
+        } else {
+            if res.last().unwrap().starts_with("~") {
+                let orig = res.last().unwrap().to_owned();
+                res.pop();
+                res.push(expand_tilde(&orig).unwrap().to_str().unwrap().to_owned());
+            }
         }
         Some(self.eval_vars(res))
     }
