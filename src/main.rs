@@ -173,8 +173,8 @@ impl Shell {
                     Ok(mut child) => {
                         child.wait().unwrap();
                     }
-                    Err(_) => {
-                        println!("josh: {}: command not found", command);
+                    Err(e) => {
+                        println!("josh: {}: command not found {:?}", command, e);
                     }
                 }
             },
@@ -216,7 +216,18 @@ impl Shell {
         let argv: Vec<&str> = input.split_whitespace().into_iter().collect();
         if argv.len() == 1 && !input.ends_with(" ") {
             //complete command
-            (Vec::new(), Vec::new())
+            let mut valid_paths: Vec<String> = Vec::new();
+            for path in env::split_paths(&std::env::var_os("PATH").unwrap()) {
+                if let Ok(entries) = std::fs::read_dir(path) {
+                    for f in entries {
+                        let f = f.unwrap();
+                        if f.path().is_file() && f.file_name().to_str().unwrap().starts_with(input) {
+                            valid_paths.push(f.file_name().to_str().unwrap().to_string());
+                        }
+                    }
+                }
+            }
+            (valid_paths.clone(), valid_paths)
         } else if input.ends_with(" ") {
             //new arg
             let mut res: Vec<String> = Vec::new();
@@ -231,6 +242,9 @@ impl Shell {
             (res.clone(), res)
         } else {
             //complete current arg
+            if argv.len() == 0 {
+                return (Vec::new(), Vec::new());
+            }
             let mut res: Vec<String> = Vec::new();
             let mut visual: Vec<String> = Vec::new();
             let mut path_to_search: PathBuf;
