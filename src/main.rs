@@ -350,7 +350,7 @@ impl Shell {
                         break;
                     }
                     Event::Key(Key::Backspace) => {
-                        if input.len() > 0 {
+                        if inp_pos > 0 {
                             input.remove(inp_pos - 1);
                             inp_pos -= 1;
                         }
