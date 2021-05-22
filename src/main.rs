@@ -44,7 +44,7 @@ fn get_path_extensions<T>(init_path: String, filter_func: T) -> (Vec<String>, Ve
     
     path_to_search.push(PathBuf::from(&init_path));
     
-    if !std::path::Path::new(&path_to_search).exists() {
+    if !path_to_search.to_str().unwrap().ends_with("/") || !Path::new(&path_to_search).exists() {
         path_to_search.pop();
     }
     
